@@ -125,7 +125,13 @@ async function getConstructionData() {
 
   for (const [key, url] of Object.entries(endpoints)) {
     try {
-      const res = await axios.get(url, { timeout: 10_000 });
+      const res = await axios.get(url, {
+        timeout: 10_000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          Accept: 'application/json'
+        }
+      });
       const data = Array.isArray(res.data)
         ? res.data
         : Array.isArray(res.data?.data)

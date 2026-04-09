@@ -11,7 +11,11 @@ async function fetchNeighborhoodDetails(id) {
   try {
     const response = await axios.get(BASE_URL, {
       params: { action: 'get_details', id },
-      timeout: 10_000
+      timeout: 10_000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        Accept: 'application/json'
+      }
     });
 
     const data = response.data;
