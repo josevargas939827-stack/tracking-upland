@@ -1,0 +1,187 @@
+iniciar bot:npm start
+reiniciar bot: pm2 restart index
+apagar bot: pm2 stop index
+actualizar el .env:pm2 restart upland-bot --update-env
+resetear el env: pm2 restart upland-bot --update-env
+guardar index:pm2 save
+ver estado del bot: pm2 list
+
+configuracion de la hora:
+0 9 * * *
+│ │ │ │ │
+│ │ │ │ └ día de la semana
+│ │ │ └── mes
+│ │ └──── día del mes
+│ └────── hora (9 AM)
+└──────── minuto (0)
+
+backup del codigo:
+require('dotenv').config();
+const axios = require('axios');
+const cron = require('node-cron');
+const { Client, GatewayIntentBits, Events } = require('discord.js');
+const { runDailyCheck } = require('./tracker');
+
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const CHANNEL_ID = process.env.DISCORD_CHANNEL_ID;
+const REPORT_TIME = process.env.REPORT_TIME || '0 9 * * *';
+const TIMEZONE = 'America/Bogota';
+
+if (!DISCORD_TOKEN || !CHANNEL_ID) {
+  console.error('Missing DISCORD_TOKEN or DISCORD_CHANNEL_ID in .env');
+  process.exit(1);
+}
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
+
+let channel = null;
+
+client.once(Events.ClientReady, async () => {
+  console.log('Discord client ready. Logged in as', client.user.tag);
+
+  try {
+    channel = await client.channels.fetch(CHANNEL_ID);
+    await channel.send('Upland Tracking Bot is now live! 🚀');
+  } catch (err) {
+    console.error('Discord error:', err.message);
+    return;
+  }
+
+  // Run immediately on startup
+  await checkData('Startup run');
+
+  // Keep existing cron-driven schedule
+  cron.schedule(
+    REPORT_TIME,
+    async () => {
+      console.log('Cron run triggered at', new Date().toISOString());
+      await checkData('Cron run');
+    },
+    { timezone: TIMEZONE }
+  );
+});
+
+async function checkData(label) {
+  return runAndReport(label || 'Manual run');
+}
+
+async function runAndReport(label) {
+  console.log(`${label} starting...`);
+
+  if (!channel) {
+    console.error('Discord channel is not ready yet.');
+    return;
+  }
+
+  try {
+    // Residentes
+    const residentReport = await runDailyCheck();
+
+    // Construcciones
+    const constructionData = await safeGetConstructionData();
+
+    const message = buildCombinedMessage(residentReport, constructionData);
+
+    // 🔥 envío protegido
+    try {
+      await channel.send(message);
+    } catch (sendErr) {
+      console.error("❌ Error enviando mensaje:", sendErr.message);
+    }
+
+  } catch (err) {
+    console.error('❌ Error general:', err.message);
+
+    try {
+      await channel.send(`Monitoring error: ${err.message}`);
+    } catch (sendErr) {
+      console.error('❌ Error enviando error:', sendErr.message);
+    }
+  }
+}
+
+async function safeGetConstructionData() {
+  try {
+    return await getConstructionData();
+  } catch (err) {
+    console.error('Construction data fetch failed:', err.message);
+    return {
+      flushing: 'N/A',
+      kew: 'N/A',
+      chatsworth: 'N/A',
+      milneburg: 'N/A',
+      winnetka: 'N/A'
+    };
+  }
+}
+
+async function getConstructionData() {
+  console.log('Fetching construction data...');
+  const endpoints = {
+    flushing:
+      'https://uplytics.org/api/get_active_offices.php?status=building&node=flushing&limit=50&offset=0',
+    kew:
+      'https://uplytics.org/api/get_active_offices.php?status=building&node=kgh&limit=50&offset=0',
+    chatsworth:
+      'https://uplytics.org/api/get_active_offices.php?status=building&node=cw&limit=50&offset=0',
+    milneburg:
+      'https://uplytics.org/api/get_active_offices.php?status=building&node=mb&limit=50&offset=0',
+    winnetka:
+      'https://uplytics.org/api/get_active_offices.php?status=building&node=win&limit=50&offset=0'
+  };
+
+  const counts = {};
+  const entries = Object.entries(endpoints);
+
+  for (const [key, url] of entries) {
+    const res = await axios.get(url, { timeout: 10_000 });
+    const data = Array.isArray(res.data)
+      ? res.data
+      : Array.isArray(res.data?.data)
+      ? res.data.data
+      : [];
+    counts[key] = data.length;
+  }
+
+  console.log('Construction data loaded');
+  return counts;
+}
+
+function buildCombinedMessage(residentReport, construction) {
+  const lines = residentReport.split('\n').filter(Boolean);
+  const header = '📊 Upland Daily Report:';
+
+  const flushingLine =
+    lines.find((l) => l.toLowerCase().includes('flushing')) ||
+    '🏙 Flushing: data unavailable';
+  const kewLine =
+    lines.find((l) => l.toLowerCase().includes('kew')) ||
+    '🏡 Kew Gardens Hills: data unavailable';
+
+  return [
+    header,
+    '',
+    `${flushingLine}`,
+    `🏗 Constructions in progress: ${construction.flushing}`,
+    '',
+    `${kewLine}`,
+    `🏗 Constructions in progress: ${construction.kew}`,
+    '',
+    '🌆 Chatsworth:',
+    `🏗 Constructions in progress: ${construction.chatsworth}`,
+    '',
+    '🌆 Milneburg:',
+    `🏗 Constructions in progress: ${construction.milneburg}`,
+    '',
+    '🌆 Winnetka:',
+    `🏗 Constructions in progress: ${construction.winnetka}`
+  ].join('\n');
+}
+
+client
+  .login(DISCORD_TOKEN)
+  .catch((err) => console.error('Discord login failed:', err.message));
+client.on("error", console.error);
+client.on("warn", console.warn);
